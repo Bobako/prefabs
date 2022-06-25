@@ -43,19 +43,40 @@ class Handler:
     session: sqlalchemy.orm.session.Session
 
     def __init__(self, base=Base):
-        engine = sqlalchemy.create_engine(DB_STRING + '?check_same_thread=False')
+        engine = sqlalchemy.create_engine('postgresql+psycopg2://api:tushpy@localhost/api_db')
         base.metadata.create_all(engine)
-        self.session = sessionmaker(bind=engine, expire_on_commit=False)()
-        print("База данных подключена.")
+        session_factory = sessionmaker(bind=engine)
+        self.session_maker = scoped_session(session_factory)
+
+    def dbconnect(self, func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            session = self.session_maker()  
+            try:
+                func(session, *args, **kwargs)
+                session.commit()
+            except Exception as ex:
+                logging.error(ex)
+                session.rollback()
+                raise
+            finally:
+                self.session_maker.remove()  
+
+        return wrapper
 
 
-"Далее, например в мейн файле:" \
-"(как вариант (если в нескольких файлах нужен доступ к бд) безусловно объявляем объект хендлера тут" \
-"и используем конкретно его в других местах)"
+h = Handler()
 
-from database import Handler
-db = Handler()
 
-some_object = db.session.query(SomeClass).filter(SomeClass.id == 1).one() # ну и флексим с сессией как хотим
-db.session.delete(some_object)
-db.session.commit()
+@h.dbconnect
+def create_users(session):
+    session.add(User("jopa"))
+
+
+@h.dbconnect
+def list_users(session):
+    print(session.query(User).all())
+
+
+if __name__ == '__main__':
+    list_users()
