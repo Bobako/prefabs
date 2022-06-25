@@ -1,11 +1,52 @@
+import functools
+import logging
+from typing import Any
+
 import sqlalchemy
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, Table, Float
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-
-from cfg import DB_STRING  # подгружаем из конфиг файлика тип и путь к БД
+from sqlalchemy.orm import sessionmaker, relationship, scoped_session
 
 Base = declarative_base()
+
+
+class Database:
+    session: sqlalchemy.orm.session.Session
+
+    def __init__(self,
+                 login: str,
+                 password: str,
+                 database_name: str,
+                 host: str = "localhost",
+                 database_type: str = "postgresql+psycopg2"):
+        engine = sqlalchemy.create_engine(
+            f'{database_type}://{login}:{password}@{host}/{database_name}')
+
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine)
+        self.session_maker = scoped_session(session_factory)
+
+    def get_session(self, func):
+        """This is a decorator to give to a 
+        function(session, *args, **kwargs) a proper scoped session"""
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            session = self.session_maker()
+            res = None
+            try:
+                res = func(session, *args, **kwargs)
+                session.commit()
+            except Exception as ex:
+                session.rollback()
+                raise ex
+            finally:
+                self.session_maker.remove()
+                return res
+
+        return wrapper
+
+
 
 
 "Примеры конкретных зависимостей:"
@@ -39,44 +80,6 @@ type_to_facility_association = Table(                                           
                                                                                         # аппендим в список, коммитим бд
 
 
-class Handler:
-    session: sqlalchemy.orm.session.Session
-
-    def __init__(self, base=Base):
-        engine = sqlalchemy.create_engine('postgresql+psycopg2://api:tushpy@localhost/api_db')
-        base.metadata.create_all(engine)
-        session_factory = sessionmaker(bind=engine)
-        self.session_maker = scoped_session(session_factory)
-
-    def dbconnect(self, func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            session = self.session_maker()  
-            try:
-                func(session, *args, **kwargs)
-                session.commit()
-            except Exception as ex:
-                logging.error(ex)
-                session.rollback()
-                raise
-            finally:
-                self.session_maker.remove()  
-
-        return wrapper
 
 
-h = Handler()
 
-
-@h.dbconnect
-def create_users(session):
-    session.add(User("jopa"))
-
-
-@h.dbconnect
-def list_users(session):
-    print(session.query(User).all())
-
-
-if __name__ == '__main__':
-    list_users()
